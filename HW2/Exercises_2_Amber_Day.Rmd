@@ -1,0 +1,149 @@
+---
+title: "Untitled"
+author: "Amber Day"
+date: "2/15/2022"
+output: html_document
+---
+
+Gradient Descent
+Read in and center data
+```{r}
+data = read.csv('https://raw.githubusercontent.com/jgscott/SDS383D/master/data/wdbc.csv', header = F)
+
+y = as.numeric(data[,2] == "M")
+X = as.matrix(data[, 3:12])
+X = apply(X, 2, scale)
+X = cbind(rep(1,nrow(data)), X)
+
+p = 11
+```
+
+
+Log-likelihood Function
+```{r}
+loglik = function(y, theta){
+  logl =  sum(y*theta - log(1+exp(theta)))
+  return(logl)
+}
+```
+
+
+Adding line search
+```{r}
+f_gamma = function(gamma){
+  theta = X%*%(beta+gamma*g)
+  logl =  sum(y*theta - log(1+exp(theta)))
+  return(-logl)
+}
+```
+
+
+Initializing
+```{r}
+beta_iter = beta = matrix(rep(0.1,11),ncol=1)
+logl_iter = c()
+tol = 1e-5
+conv = F
+logl.old = -100000
+```
+
+
+Gradient Descent
+```{r}
+while (!conv){
+  g = 0
+  for (i in 1:nrow(X)){
+    g = g + (y[i] - exp(sum(X[i,]*beta))/(1+exp(sum(X[i,]*beta))))*X[i,]
+  }
+  g = matrix(g,ncol=1)
+  gamma = optimize(f_gamma, c(1e-6, 0.3))$minimum
+  beta = beta + gamma*g
+  beta_iter = cbind(beta_iter,beta)
+  theta = X%*%beta
+  logl = loglik(y,theta)
+  logl_iter = c(logl_iter,logl)
+  if (abs(logl.old - logl) < tol){
+    conv = T
+  }
+
+  logl.old = logl
+
+}
+```
+
+Plotting comparison
+```{r}
+comp = glm(y ~ X, family = binomial())
+
+plot(logl_iter, type = "l", main = "Gradient Descent vs glm", ylab = "Log-likelihood")
+abline(h = logLik(comp), col = "blue")
+legend("right", legend = c("Gradient Descent Inference", "glm()"), lty = 0, col = c("black", "blue"))
+
+```
+
+Newton's Method
+Initializing
+```{r}
+theta = X%*%beta
+```
+
+Newton's Method
+```{r}
+while (!conv){
+  g = 0
+  for (i in 1:nrow(X)){
+    g = g + (y[i] - exp(sum(X[i,]*beta))/(1+exp(sum(X[i,]*beta))))*X[i,]
+  }
+  g = matrix(g,ncol=1)
+
+  W.vec = exp(theta)/(1+exp(theta))^2
+  W = diag(as.vector(W.vec)) 
+  
+  H = -t(X)%*%W%*%X 
+  
+  beta = beta - solve(H)%*%g
+  beta_iter = cbind(beta_iter, beta)
+
+  theta = X%*%beta
+
+  logl = loglik(y, theta)
+  logl_iter = c(logl_iter, logl)
+
+  if (abs(logl.old - logl) < tol){
+    conv = T
+  }
+
+  logl.old = logl
+}
+```
+
+Plotting comparison
+```{r}
+comp = glm(y ~ 0 + X, family = binomial())
+
+beta - comp$coefficients
+
+plot(logl_iter, type = "l", main = "Newton's Method vs glm", ylab = "Log-likelihood")
+abline(h = logLik(comp), col = "blue")
+legend("right", legend = c("Newton's Method", "glm()"), lty = 0, col = c("black", "blue"))
+
+```
+
+
+SE vs Hessian
+```{r}
+inv.Hess = -solve(H)
+sd.errors = rep(0, p)
+for(i in 1:p){
+    sd.errors[i] = sqrt(inv.Hess[i, i])
+}
+
+sd.errors - summary(comp)$coefficients[, 2]
+```
+
+```{r}
+sd.errors
+summary(comp)$coefficients[,2]
+
+```
+
