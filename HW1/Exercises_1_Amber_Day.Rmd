@@ -1,0 +1,66 @@
+---
+title: "HW1"
+author: "Amber Day"
+date: "3/5/2022"
+output: html_document
+---
+Inversion vs LU decomposition
+```{r}
+require(matlib) #for the slower inv() function
+require(matrixcalc) #for faster LU decomposition
+require(microbenchmark) #https://www.r-bloggers.com/2015/01/using-the-microbenchmark-package-to-compare-the-execution-time-of-r-expressions/
+```
+
+Inversion 
+```{r}
+invfun = function(x,y,w){
+  betahat = inv(t(x)%*%w%*%x)%*%t(x)%*%w%*%y
+  return(betahat)
+}
+
+```
+
+LU decomposition
+```{r}
+lufun = function(x,y,w){
+  #factor X'WX as LU
+  decomposition = lu.decomposition(t(x)%*%w%*%x)
+  l = decomposition$L
+  u = decomposition$U
+  
+  #solve for z
+  z = forwardsolve(l, t(x)%*%w%*%y)
+  
+  #solve for betahat
+  betahat = backsolve(u,z)
+}
+```
+
+Simulate data
+```{r}
+N = c(10,100,500)
+P = c(2,50,100)
+
+for(i in 1:length(N)){
+  n = N[i]
+  p = P[i]
+  w = diag(n)
+  #filling x with random values
+  x = matrix(rnorm(n*p),n,p)
+  #making y depend on x
+  y = rnorm(n, 2*x[,1]+3*x[,2],1)
+  #saving benchmark info
+  assign(paste0("benchmark",i), microbenchmark(invfun(x,y,w), lufun(x,y,w),times = 10))
+}
+```
+
+Implementation
+```{r}
+#printing results
+for (i in 1:length(N)) {
+  print(get(paste0("benchmark",i)))
+}
+
+```
+
+
