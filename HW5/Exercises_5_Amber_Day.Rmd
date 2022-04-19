@@ -1,0 +1,355 @@
+---
+title: "Untitled"
+author: "Amber Day"
+date: "4/19/2022"
+output: html_document
+---
+
+
+```{r}
+require(lme4)
+require(lattice)
+require(MCMCpack)
+require(MASS)
+require(Matrix)
+```
+
+
+```{r}
+cheese = read.csv("https://raw.githubusercontent.com/jgscott/SDS383D/master/data/cheese.csv")
+
+cheese_0 = cheese[cheese[,4]==0,]
+cheese_1 = cheese[cheese[,4]==1,]
+
+model.lm0 = lm(log(cheese_0$vol) ~ 1 + log(cheese_0$price), data=cheese_0)
+model.lm1 = lm(log(cheese_1$vol) ~ 1 + log(cheese_1$price), data=cheese_1)
+```
+
+
+```{r}
+# Investigation
+
+xyplot( log(cheese$vol) ~ log(cheese$price) , group=as.factor(cheese$disp), 
+       xlab='log(Price)', ylab='log(Volume)',main='Scatterplots of Data by Display',
+       scales = list(x = list(log = 10, equispaced.log = F)),
+       type = c("p", "r"))
+
+xyplot( log(cheese$vol) ~ log(cheese$price) | cheese$store, group=as.factor(cheese$disp), 
+       strip=F, xlab='log(Price)', ylab='log(Volume)',main='Scatterplots by Store',
+       scales = list(x = list(log = 10, equispaced.log = F)),
+       type = c("p", "r"))
+
+stores = unique(cheese[,1])
+
+stores.avg = matrix(0,88,2)
+for (i in 1:88){
+	temp = cheese[cheese[,1]==stores[i],]
+	stores.avg[i,1] = mean(log(temp[temp$disp==0,2]*temp[temp$disp==0,3]))
+	stores.avg[i,2] = mean(log(temp[temp$disp==1,2]*temp[temp$disp==1,3]))
+}
+
+boxplot(stores.avg,xlab='Display',ylab='Mean log(Sales)',main='Boxplot of Avg Sales by Display',names=c('0','1'))
+```
+
+
+```{r}
+# Fit using LMER
+
+model.rml = lmer(log(cheese$vol) ~ log(cheese$price) + cheese$disp + log(cheese$price):cheese$disp | store, data=cheese)
+
+plot(model.rml)
+qqnorm(residuals(model.rml))
+
+coef(model.rml)
+
+cheese28 = cheese[cheese[,1]==stores[28],]
+cheese88 = cheese[cheese[,1]==stores[88],]
+
+par(mfrow=c(1,2))
+plot(log(cheese28$price),log(cheese28$vol),col=cheese28$disp+1,main='ATLANTA - WINN DIXIE',xlab='log(price)',ylab='log(volume)')
+abline(8.049699,-0.05569669)
+abline(8.049699-0.29894912,-0.05569669 + 0.22842926,col=2)
+
+plot(log(cheese88$price),log(cheese88$vol),col=cheese88$disp+1,main='DALLAS/FT. WORTH - WINN DIXIE',xlab='log(price)',ylab='log(volume)')
+abline(9.994213,-3.32491911)
+abline(9.994213+1.56628926 ,-3.32491911-1.06414002,col=2)
+
+# Heirarchical Bayesian Model via Gibbs Sampling
+
+st = length(stores)
+n.iter = 5000
+
+X = cbind(1,log(cheese[,2]),cheese[,4],log(cheese[,2])*cheese[,4])
+Y = log(cheese[,3])
+
+# Set Hyper-Priors
+Psi = diag(rep(1,4))
+
+lm(log(cheese$vol) ~ 1 + log(cheese$price) + cheese$disp + log(cheese$price):cheese$disp)$coefficients
+#(Intercept)             log(cheese$price)                   cheese$disp log(cheese$price):cheese$disp 
+#8.8095803                    -0.8898247                     0.7695531                    -0.3958158 
+Theta.0 = c(8.8095803, -0.8898247, 0.7695531, -0.3958158)
+
+nu = 4
+p  = 4
+
+# Initialize values
+
+SigmaInv = solve(Psi)
+Theta.i  = Theta.0
+
+beta=NULL
+beta.i = NULL
+for (i in 1:st){
+	beta[[i]] = matrix(0,n.iter,4)
+	beta.i[[i]] = rep(0,4)
+}
+sig.i = 1
+Sigma = NULL
+
+
+for(i in 1:n.iter){
+betasum1 = matrix(0,4,4)
+totsum   = 0
+betasum2 = matrix(0,4,1)
+for (j in 1:st){
+	temp.X = X[cheese[,1]==stores[j],]
+	temp.Y = Y[cheese[,1]==stores[j]]
+	xx = matrix(0,4,4)
+	yx = matrix(0,4,1)
+	for(k in 1:dim(temp.X)[1]){
+		xx = xx + temp.X[k,]%*%t(temp.X[k,])
+		yx = yx + temp.X[k,]*temp.Y[k]
+	}	
+	beta.i[[j]] = mvrnorm(1,ginv(SigmaInv + sig.i*xx)%*%(SigmaInv%*%Theta.i + sig.i*yx), ginv(SigmaInv + sig.i*xx))
+	beta[[j]][i,1] = beta.i[[j]][1]
+	beta[[j]][i,2] = beta.i[[j]][2]
+	beta[[j]][i,3] = beta.i[[j]][3]
+	beta[[j]][i,4] = beta.i[[j]][4]
+	# We will need these later
+	betasum1 = betasum1 + (beta.i[[j]] - Theta.i)%*%t(beta.i[[j]] - Theta.i)
+	totsum   = totsum + sum((temp.X%*%beta.i[[j]]-temp.Y)^2)
+	betasum2 = betasum2 + beta.i[[j]]
+}
+
+Sigma[[i]] = riwish(nu+88,Psi+betasum1%*%t(betasum1))
+SigmaInv = ginv(Sigma[[i]])
+
+sig.i   = 1/rgamma(1,dim(X)[2]/2,totsum/2)
+Theta.i = mvrnorm(1,ginv(diag(rep(1,4))+88*SigmaInv)%*%(Theta.0 + SigmaInv%*%betasum2),ginv(diag(rep(1,4))+88*SigmaInv))
+}
+```
+
+
+```{r}
+# Plots of Results for specific stores
+store1=11
+store2=27
+cheese1 = cheese[cheese[,1]==stores[store1],]
+cheese2 = cheese[cheese[,1]==stores[store2],]
+
+par(mfrow=c(1,2))
+plot(log(cheese1$price),log(cheese1$vol),col=cheese1$disp+1,main=stores[store1],xlab='log(price)',ylab='log(volume)')
+abline(colMeans(beta[[store1]])[1],colMeans(beta[[store1]])[2])
+abline(colMeans(beta[[store1]])[1]+colMeans(beta[[store1]])[3],colMeans(beta[[store1]])[2]+colMeans(beta[[store1]])[4],col=2)
+
+plot(log(cheese2$price),log(cheese2$vol),col=cheese2$disp+1,main=stores[store2],xlab='log(price)',ylab='log(volume)')
+abline(colMeans(beta[[store2]])[1],colMeans(beta[[store2]])[2])
+abline(colMeans(beta[[store2]])[1]+colMeans(beta[[store2]])[3],colMeans(beta[[store2]])[2]+colMeans(beta[[store2]])[4],col=2)
+
+```
+
+```{r}
+for (i in 1:88) {
+  cheese1 = cheese[cheese[,1]==stores[i],]
+  par(mfrow=c(1,1))
+plot(log(cheese1$price),log(cheese1$vol),col=cheese1$disp+1,main=stores[i],xlab='log(price)',ylab='log(volume)')
+abline(colMeans(beta[[i]])[1],colMeans(beta[[i]])[2])
+abline(colMeans(beta[[i]])[1]+colMeans(beta[[i]])[3],colMeans(beta[[i]])[2]+colMeans(beta[[i]])[4],col=2)
+}
+```
+
+
+Part 2
+```{r}
+rm(list=ls())
+#Set up
+require(fields) # for diagonal matrix multiplication
+require(tidyverse) # for tidyverse
+require(ggplot2) # for plotting
+require(ggpubr) # for arranging plots
+require(mvtnorm) # for multivariate normal and t distributions
+require(progress) # for progress bar
+require(bayestestR) # mostly for ci() function
+require(coda) # for convergence diagnostics
+require(invgamma) # for inverse gamma
+require(LaplacesDemon)
+require(truncnorm)
+require(dplyr)
+set.seed(702)
+mrs.pb = function(string, M){
+  require(progress)
+  pb = progress_bar$new(format = paste0(string," [:bar] :percent eta: :eta"), total = M, clear = F)
+  return(pb)
+}
+```
+
+```{r}
+#Data
+data = read.csv("https://raw.githubusercontent.com/jgscott/SDS383D/master/data/polls.csv", header=T)
+
+# only keep desired rows and omit observations that have NAs
+data = data %>% dplyr::select(-c(org, year, survey, weight)) %>% na.omit()
+
+# set values for categorical variables
+data = data %>% dplyr::mutate(Age = as.integer(factor(data$age))) %>% dplyr::select(-age)
+data = data %>% dplyr::mutate(Edu = as.integer(factor(data$edu, levels = c("NoHS", "HS", "SomeColl", "Bacc")))) %>% dplyr::select(-edu)
+
+names = unique(data$state)
+n = length(names)
+biggest.sample = names(which.max(table(data$state)))
+max = sum(data$state == biggest.sample) # largest number of observations per store
+P = 4 # was 10
+
+Y = matrix(NA, n, max)
+X = array(NA, dim = c(max, P+1, n))
+N.i = rep(0, n)
+
+for(i in 1:n){
+    tmp.data = data[which(data$state==names[i]),] # data set for current state
+    N.i[i] = dim(tmp.data)[1] # number of observations for store i
+    Y[i, 1:(N.i[i])] = tmp.data$bush # states voters
+    for(j in 1:N.i[i]){
+        X[j, , i] = c(1, as.numeric(tmp.data[j, 3:6]))
+    }
+}
+
+```
+
+```{r}
+#Initialize
+beta.star = matrix(rnorm((P+1)*n, 0, 10^4), P+1, n)
+B.star = diag(P+1)
+alpha = matrix(0, P+1, n)
+for(i in 1:n){
+    alpha[, i] = rmvnorm(1, beta.star[, i], B.star)
+}
+Z = matrix(NA, n, max)
+for(i in 1:n){
+    for(j in 1:N.i[i]){
+        Z[i, j] = ifelse(Y[i, j] == 1, rtruncnorm(1, a = 0, mean = 0, sd = 1), rtruncnorm(1, b = 0, mean = 0, sd = 1))
+    }
+}
+
+nu.0 = P + 2 
+```
+
+```{r}
+#Save Matrices
+n.mcmc = 100 #10000
+beta.save = array(NA, dim = c(P+1, n, n.mcmc))
+alpha.save = array(NA, dim = c(P+1, n, n.mcmc))
+Z.save = array(NA, dim = c(n, max, n.mcmc))
+
+beta.save[, , 1] = beta.star
+alpha.save[, , 1] = alpha
+Z.save[, , 1] = Z
+
+pb = mrs.pb("Progress: ", n.mcmc)
+
+```
+
+```{r}
+#MCMC
+for(k in 2:n.mcmc){
+    pb$tick()
+
+    # Update alpha
+
+    for(i in 1:n){
+        B.tilde = solve(solve(B.star) + t(X[1:N.i[i], , i])%*%X[1:N.i[i], , i])
+        beta.tilde = B.tilde%*%(  solve(B.star)%*%beta.save[, i, k-1] +  t(X[1:N.i[i], , i])%*%Z.save[i, 1:N.i[i], k-1] )
+
+    }
+
+    # Update z
+
+    for(i in 1:n){
+        for(j in 1:N.i[i]){
+            if(Y[i, j] == 1){
+                Z.save[i, j, k] = rtruncnorm(1, a = 0, mean = X[j, , i]%*%alpha.save[, i, k], sd = 1)
+            }
+            if(Y[i, j] == 0){
+                Z.save[i, j, k] = rtruncnorm(1, b = 0, mean = X[j, , i]%*%alpha.save[, i, k], sd = 1)
+            }
+        }
+    }
+
+    #Update beta.star
+
+    for(i in 1:n){
+        A.inv = solve( solve(B.star) + solve(10^4*diag(P+1))  ) 
+        tmp.mean = A.inv%*%( solve(B.star)%*%alpha.save[, i, k] )
+        beta.save[, i, k] = rmvnorm(1, tmp.mean, A.inv)
+    }
+
+    #Update B.star
+
+    nu = n + nu.0
+    tmp.sum = 0
+    for(i in 1:n){
+        tmp.sum = tmp.sum + (alpha.save[, i, k] - beta.save[, i, k])%*%t(alpha.save[, i, k] - beta.save[, i, k])
+    }
+    S = diag(P + 1) + tmp.sum
+
+    B.star = rinvwishart(nu, S)
+
+}
+
+```
+
+
+
+```{r}
+#Trace plots
+n.burn = .3*n.mcmc
+for(i in 1:n){
+    tmp.df = data.frame(iter = n.burn:n.mcmc, mu = alpha.save[1, i, n.burn:n.mcmc], beta1 = alpha.save[2, i, n.burn:n.mcmc], beta2 = alpha.save[3, i, n.burn:n.mcmc], beta3 = alpha.save[4, i, n.burn:n.mcmc], beta4 = alpha.save[5, i, n.burn:n.mcmc])
+    plot.df = tmp.df %>% gather(key = "variable", value = "value", -1)
+    traces = ggplot(plot.df, aes(x = iter, y = value)) + geom_line(aes(color = variable)) + theme_dark() + ggtitle("Trace Plots") + xlab("Iteration") + ylab("Value")
+    assign(paste0("t", i), traces)
+}
+
+t2
+# t4
+# t8
+# t9
+# t14
+
+ ### Compare t2 (good) and t3 (bad)
+ N.i[2] # more observations
+ N.i[3] # less observations
+ diff = X[,,2]-X[,,3]
+ X2 = as.matrix(X[1:N.i[2], , 2])
+ X3 = X[1:N.i[3], , 3]
+
+ your.matrix = X3
+
+ rankifremoved = sapply(1:ncol(your.matrix), function (x) qr(your.matrix[,-x])$rank)
+ which(rankifremoved == max(rankifremoved))
+
+NJ = data %>% filter(state == "NJ")
+CT = data %>% filter(state == "CT")
+ME = data %>% filter(state == "ME")
+```
+
+```{r}
+#Posterior Means Across States
+
+post.betas <- rep(0, 9)
+for(i in 1:9){
+    post.betas[i] <- mean(beta.save[i, , n.burn:n.mcmc])
+}
+post.betas
+```
+
