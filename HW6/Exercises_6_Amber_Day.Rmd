@@ -1,0 +1,644 @@
+---
+title: "ex6"
+author: "Amber Day"
+date: "4/6/2022"
+output: html_document
+---
+Curve Fitting by Linear Smoothing
+```{r setup, include=FALSE}
+rm(list=ls())
+require(ggplot2)
+require(dplyr)
+```
+
+```{r}
+# Takes in a dataset and a kernel function
+# Outputs a function which is the kernel smoother
+  # Parameter to this function is a vector of regressors
+smoother_fitter = function(X, Y, kernel, h) {
+  smoother = function(x) {
+    # Calculate weights
+    weights = sapply(X, function(val) kernel((x - val)/h) /h )
+    # Normalize weights
+    normalized = weights / sum(weights)
+    
+    (normalized %*% Y)[1,1]
+    #normalized
+  }
+  smoother
+}
+
+# Some kernel functions
+gaussian_kernel = function(x) {
+  exp(-x^2/2)/sqrt(2*pi)
+}
+indicator_kernel = function(x) {
+  abs(x) < 1
+}
+
+# Create some noisy data
+# f(x) = x^5 cos(x)
+x = runif(100, -5, 5)
+y = sapply(x, function(val) rnorm(1, val^5 * cos(val), 3))
+x = x - mean(x)
+y = y - mean(y)
+
+data = data.frame(x, y)
+
+data %>% 
+  ggplot(aes(x=x, y=y)) +
+  geom_point(size=0.5, alpha=0.5)
+
+smoother = smoother_fitter(x, y, gaussian_kernel, 0.5)
+x_new = seq(-5, 5, by=0.01)
+
+h_values = c(0.1, 1, 2, 5, 7)
+pred_mat = matrix(data=NA, nrow=length(x_new), ncol=length(h_values))
+for (i in 1:length(h_values)) {
+  smoother = smoother_fitter(x, y, gaussian_kernel, h_values[i])
+  y_pred = sapply(x_new, smoother)
+  pred_mat[,i] = y_pred
+}
+
+pred_df = data.frame(pred_mat, x_new)
+
+ggplot() +
+  geom_point(data=data, aes(x=x, y=y), size=0.5, alpha=0.5) +
+  geom_line(data=pred_df, aes(x=x_new, y=X1, color="h = 0.1")) +
+  geom_line(data=pred_df, aes(x=x_new, y=X2, color="h = 1")) +
+  geom_line(data=pred_df, aes(x=x_new, y=X3, color="h = 2")) +
+  geom_line(data=pred_df, aes(x=x_new, y=X4, color="h = 5")) +
+  geom_line(data=pred_df, aes(x=x_new, y=X5, color="h = 7")) +
+  labs(color="Legend") +
+  scale_color_manual(values=c("red", "orange", "yellow", "green", "blue"))
+```
+
+```{r}
+# Train and test should be in this format: matrix with columns X, Y
+# Returns a list
+  # Each item in list is a pair: function and error on test set
+train_test_smoother = function(train, 
+                                test, 
+                                kernel, 
+                                h = c(0.1, 1, 2, 5, 7)) {
+  fns = vector(mode = "list", length = length(h))
+  errors = vector(length = length(h))
+  for (i in 1:length(h)) {
+    # Create function
+    smoother = smoother_fitter(train[,1], train[,2], kernel, h[i])
+    # Calculate error on test set
+    y_pred = sapply(test[,1], smoother)
+    residual = test[,2] - y_pred
+    fns[[i]] = smoother
+    errors[i] = (residual%*%residual)[1,1]
+  }
+  list("functions" = fns, "errors" = errors)
+}
+
+# function to create dataset
+create_test_train = function(n, 
+                              test_prop, 
+                              fn, 
+                              sd = 1, 
+                              low = 0, 
+                              high = 1) {
+  x_train = runif(n * (1 - test_prop), low, high)
+  exact_train = fn(x_train)
+  noisy_train = sapply(exact_train, function(val) rnorm(1, val, sd))
+  train = cbind(x_train, noisy_train)
+  
+  x_test = runif(n * test_prop, low, high)
+  exact_test = fn(x_test)
+  noisy_test = sapply(exact_test, function(val) rnorm(1, val, sd))
+  test = cbind(x_test, noisy_test)
+  
+  list("train" = train, "test" = test)
+}
+
+f = function(x) x ^ 5 * cos(x)
+
+dataset = create_test_train(120, 0.2, f, 1, -5, 5)
+train = dataset$train
+test = dataset$test
+results = train_test_smoother(train, test, gaussian_kernel)
+
+wiggly = function(x) cos(5 * x)
+smooth = function(x) x^7
+
+wiggly_noisy = create_test_train(500, 0.2, wiggly, sd = 1)
+smooth_noisy = create_test_train(500, 0.2, smooth, sd = 1)
+wiggly_quiet = create_test_train(500, 0.2, wiggly, sd = 0.1)
+smooth_quiet = create_test_train(500, 0.2, smooth, sd = 0.1)
+
+h_values = seq(0.1, 3, by=0.1)
+
+# Helper functions
+find_optimal_h = function(dataset, kernel, h = c(0.1, 1, 2, 5, 7)) {
+  results = train_test_smoother(dataset$train,
+                                 dataset$test,
+                                 kernel,
+                                 h = c(0.1, 1, 2, 5, 7))
+  opt_index = which(results$errors == min(results$errors))
+  best_fn = results$functions[[opt_index]]
+  best_error = results$errors[opt_index]
+  best_h = h[opt_index]
+  list("fun" = best_fn, "error" = best_error, "h" = best_h)
+}
+
+create_line_df = function(fun, low = 0, high = 1, by = 0.01) {
+  x_grid = seq(low, high, by = by)
+  y_vals = sapply(x_grid, fun)
+  data.frame(x_grid, y_vals)
+}
+
+# Wiggly and Noisy
+results = find_optimal_h(wiggly_noisy, gaussian_kernel, h_values)
+wn_test_df = data.frame(wiggly_noisy$test)
+wn_line_df = create_line_df(results$fun)
+ggplot() +
+  geom_point(data=wn_test_df, aes(x=x_test, y=noisy_test), size=0.5, alpha=0.5) +
+  geom_line(data=wn_line_df, aes(x=x_grid, y=y_vals))
+results$h
+# for wiggly and noisy, the best h = 0.1
+
+# Wiggly and not-so-noisy
+results2 = find_optimal_h(wiggly_quiet, gaussian_kernel, h_values)
+wq_test_df = data.frame(wiggly_quiet$test)
+wq_line_df = create_line_df(results2$fun)
+ggplot() +
+  geom_point(data=wq_test_df, aes(x=x_test, y=noisy_test), size=0.5, alpha=0.5) +
+  geom_line(data=wq_line_df, aes(x=x_grid, y=y_vals))
+results2$h
+# here the best h = 0.1 too
+
+# Smooth and Noisy
+results3 = find_optimal_h(smooth_noisy, gaussian_kernel, h_values)
+sn_test_df = data.frame(smooth_noisy$test)
+sn_line_df = create_line_df(results3$fun)
+ggplot() +
+  geom_point(data=sn_test_df, aes(x=x_test, y=noisy_test), size=0.5, alpha=0.5) +
+  geom_line(data=sn_line_df, aes(x=x_grid, y=y_vals))
+results3$h
+# h = 0.1
+
+# Smooth and not-so-noisy
+results4 = find_optimal_h(smooth_quiet, gaussian_kernel, h_values)
+sq_test_df = data.frame(smooth_quiet$test)
+sq_line_df = create_line_df(results4$fun)
+ggplot() +
+  geom_point(data=sq_test_df, aes(x=x_test, y=noisy_test), size=0.5, alpha=0.5) +
+  geom_line(data=sq_line_df, aes(x=x_grid, y=y_vals))
+results4$h
+# h = 0.1
+
+# Using leave one out
+leave_one = function(dataset, kernel, h) {
+  x = dataset[,1]
+  y = dataset[,2]
+  loocv = c()
+  H = x %*% solve(t(x) %*% x) %*% t(x)
+  n = length(y)
+  for (val in h) {
+    fun = smoother_fitter(x, y, kernel, val)
+    y_pred = sapply(x, fun)
+    error = sum(sapply(1:n, function(i) ((y[i] - y_pred[i]) / (1 - H[i,i]))^2))
+    loocv = append(loocv, error)
+  }
+  loocv
+}
+
+# Process data
+wn = rbind(wiggly_noisy$train, wiggly_noisy$test)
+wq = rbind(wiggly_quiet$train, wiggly_quiet$test)
+sn = rbind(smooth_noisy$train, smooth_noisy$test)
+sq = rbind(smooth_quiet$train, smooth_quiet$test)
+
+wn_errors = leave_one(wn, gaussian_kernel, h_values)
+wq_errors = leave_one(wq, gaussian_kernel, h_values)
+sn_errors = leave_one(sn, gaussian_kernel, h_values)
+sq_errors = leave_one(sq, gaussian_kernel, h_values)
+
+# table of errors 
+errors = cbind(wn_errors, wq_errors, sn_errors, sq_errors)
+rownames(errors) = h_values
+colnames(errors) = c("wiggly-noisy", 
+                     "wiggly-quiet", 
+                     "smooth-noisy", 
+                     "smooth-quiet")
+
+
+```
+
+Local polynomial regression
+
+```{r}
+rm(list=ls())
+#Set up
+require(fields) # for diagonal matrix multiplication
+require(tidyverse) # for tidyverse
+require(ggplot2) # for plotting'
+require(ggpubr) # for arranging plots
+require(mvtnorm) # for multivariate normal and t distributions
+require(progress) # for progress bar
+require(bayestestR) # mostly for ci() function
+require(coda) # for convergence diagnostics
+require(invgamma) # for inverse gamma
+require(LaplacesDemon)
+require(truncnorm)
+require(dplyr)
+set.seed(702)
+mrs.pb = function(string, M){
+  require(progress)
+  pb = progress_bar$new(format = paste0(string," [:bar] :percent eta: :eta"), total = M, clear = F)
+  return(pb)
+}
+data = read.csv("https://raw.githubusercontent.com/jgscott/SDS383D/master/data/utilities.csv")
+setwd("~/!Spring2022/SM_2")
+```
+
+
+```{r}
+
+
+Y = data$gasbill/data$billingdays
+X = data$temp
+n = length(X)
+
+###
+### Functions
+###
+
+## Weight Function
+weight.func = function(x.new, x.old, h){ # indexed by i is the actual "old" data
+    int0 = (x.new - x.old)/h
+    s1 = sj.func(x.new, h, 1)
+    s2 = sj.func(x.new, h, 2)
+    weight = gauss.kernel(int0)*(s2 - (x.old - x.new)*s1)
+    return(weight)
+}
+
+## s function
+sj.func = function(x.new, h, j){
+    sum = 0
+    for(i in 1:n){
+        int = (x.new - X[i])/h
+        sum = sum + gauss.kernel(int)*(X[i] - x.new)^j
+    }
+    return(sum)
+}
+
+## Kernel Function
+gauss.kernel = function(x){
+    sol = exp(-(x)^2/2)/sqrt(2*pi)
+    return(sol)
+}
+```
+
+
+```{r}
+# (E)
+
+# Problem Set-up
+H = seq(0.1, 15, length.out = 100)
+LOOCV = rep(0, length(H)) 
+
+x.grid = X
+M = length(x.grid)
+Y.matrix = matrix(0, M, length(H)) 
+
+# Progress Bar
+pb = mrs.pb("bills, bills, bills...", length(H))
+
+H.mat = matrix(0, n, M) # !!
+weightz = rep(0, n)
+
+# For all h
+for(k in 1:length(H)){
+
+    pb$tick() 
+  
+    h = H[k] 
+    smooth.y = rep(0, M)
+    
+    for(j in 1:M){ 
+        num = den = 0 
+        for(i in 1:n){ 
+            num = num + weight.func(x.grid[j], X[i], h)*Y[i]
+            den = den + weight.func(x.grid[j], X[i], h)
+            weightz[i] = weight.func(x.grid[j], X[i], h)
+        }
+        weightz = weightz/sum(weightz)
+
+        for(i in 1:n){
+            H.mat[i, j] = weightz[i]
+        }
+
+        smooth.y[j] = num/den
+    }
+
+    LOOCV.tmp = 0
+    for(i in 1:n){ 
+        num.tmp = Y[i] - smooth.y[i]
+        den.tmp = 1 - H.mat[i, i]
+        LOOCV.tmp = LOOCV.tmp + (num.tmp/den.tmp)^2
+    }
+    LOOCV[k] = LOOCV.tmp/n
+
+    Y.matrix[, k] = smooth.y
+}
+
+# Different fxns
+
+# Data prep
+name.vec = 0
+for(i in 1:length(H)){
+    tmp = paste0("h = ", H[i])
+    name.vec = c(name.vec, tmp)
+}
+name.vec = name.vec[-1]
+colnames(Y.matrix) = name.vec
+plot.df = data.frame(cbind(x.grid, Y.matrix))
+plot.df = plot.df %>% gather(key = "h", value = "value", -1)
+point.df = data.frame(test.y = Y, test.x = X)
+
+# Get LOOCV
+LOOCV
+
+# Optimal vs data
+
+# Optimal h
+optim.h = which(LOOCV == min(LOOCV, na.rm = TRUE))
+y.fit = Y.matrix[, optim.h]
+
+```
+
+
+```{r}
+# Plot
+ggplot(plot.df, aes(x = x.grid, y = value)) + geom_line(aes(color = h)) + theme_classic() + ggtitle("Local Linear Estimation") + xlab("x") + ylab("Estimated Value") + geom_point(point.df, mapping = aes(x = test.x, y = test.y), alpha = 0.4) + theme(legend.position = "none")
+```
+
+
+```{r}
+## Plot Fit vs Actual
+plot.df = data.frame(fit = y.fit, x = X, actual = Y)
+ggplot(plot.df, aes(x = X)) + geom_line(aes(y = fit), color = "purple") + geom_point(aes(y = actual), color = "pink") + ggtitle("Optimal H=6.8: Fit y vs. Truth using LLR ") + xlab("x") + ylab("y") + theme_classic()
+```
+
+
+```{r}
+#(F)
+
+resid = Y- y.fit
+resid.df = data.frame(x = X, resid = resid)
+ggplot(resid.df, aes(x = x, y = resid)) + geom_point(color = "pink") + ggtitle("Residuals From the Fitted Model") + xlab("X") + ylab("Y") + theme_classic() + geom_hline(yintercept = 0, linetype = "dashed", color="purple")
+```
+
+
+```{r}
+#(G)
+Weight.mat = matrix(0, n, n)
+for(i in 1:n){ 
+    for(j in 1:n){ 
+        Weight.mat[i, j] = weight.func(X[j], X[i], H[optim.h]) 
+    }
+    Weight.mat[i, ] = Weight.mat[i, ]/sum(Weight.mat[i, ])
+}
+
+s2.hat = t(Y - Weight.mat%*%Y)%*%(Y - Weight.mat%*%Y)/(n - 2*sum(diag(Weight.mat)) + sum(diag(t(Weight.mat)%*%Weight.mat)))
+
+ci.low = ci.high = rep(0, n) 
+for(i in 1:n){
+    fact = 1.96*sqrt(s2.hat*sum(Weight.mat[i, ]^2))
+    ci.low[i] = y.fit[i] - fact
+    ci.high[i] = y.fit[i] + fact
+}
+
+ci.df = data.frame(low = ci.low, high = ci.high, x = X)
+```
+
+
+```{r}
+# Plot
+plot.df = data.frame(fit = y.fit, x = X, actual = Y)
+ ggplot(plot.df, aes(x = X)) + geom_line(aes(y = fit)) + geom_point(aes(y = actual), color = "pink") + ggtitle("Fit vs Truth") + xlab("x") + ylab("y") + theme_classic() + geom_segment(ci.df, mapping = aes(x = x, xend = x, y = low, yend = high), color = "red", size = 1)
+```
+
+
+```{r}
+ggplot(plot.df, aes(x = X)) + geom_line(aes(y = fit)) + geom_point(aes(y = actual), color = "pink") + ggtitle("Fit vs Truth") + xlab("x") + ylab("y") + theme_classic() + geom_ribbon(ci.df, mapping = aes(ymin = low, ymax = high), color = "purple", size = 1, alpha = 0.2)
+
+
+```
+
+Gaussian Processes
+
+```{r}
+rm(list=ls())
+#Set up
+require(fields) # for diagonal matrix multiplication
+require(tidyverse) # for tidyverse
+require(ggplot2) # for plotting'
+require(ggpubr) # for arranging plots
+require(mvtnorm) # for multivariate normal and t distributions
+require(progress) # for progress bar
+require(bayestestR) # mostly for ci() function
+require(coda) # for convergence diagnostics
+require(invgamma) # for inverse gamma
+require(LaplacesDemon)
+require(truncnorm)
+require(dplyr)
+set.seed(702)
+mrs.pb = function(string, M){
+  require(progress)
+  pb = progress_bar$new(format = paste0(string," [:bar] :percent eta: :eta"), total = M, clear = F)
+  return(pb)
+}
+data = read.csv("https://raw.githubusercontent.com/jgscott/SDS383D/master/data/utilities.csv")
+setwd("~/!Spring2022/SM_2")
+```
+
+
+```{r}
+matern.func = function(x, b, tau1sq, tau2sq) {
+	eucDist = as.matrix(dist(x,diag=T,upper=T))
+	kron.delta = diag(nrow=length(x))
+	tau1sq*exp(-.5*(eucDist/b)^2) + tau2sq*kron.delta
+}
+
+matern2.func = function(x, b, tau1sq, tau2sq) {
+	eucDist = as.matrix(dist(x,diag=T,upper=T))
+	kron.delta = diag(nrow=length(x))
+
+    tau1sq*(1 + sqrt(5)*eucDist/b + 5*eucDist^2/(3*b^2))*exp(-sqrt(5)*eucDist/b) + tau2sq*kron.delta
+}
+
+n = 500
+x.grid = sort(runif(n, 0, 1))
+
+t2 = 0
+b = seq(0.0001, 1, length.out = 10)
+t1 = seq(0, 2, length.out = 10)
+
+pb = mrs.pb("Gaussian Process fitting:", length(b)*length(t1))
+
+for(i in 1:length(b)){ 
+
+    Y.matrix = matrix(0, nrow = n, ncol = 1) # initialize
+
+    for(j in 1:length(t1)){ 
+        pb$tick()
+
+        tmp.Sig = matern.func(x.grid, b[i], t1[j], t2) 
+        tmp.vec = rmvnorm(1, rep(0, n), tmp.Sig)
+        Y.matrix = cbind(Y.matrix, t(as.matrix(tmp.vec)))
+
+    }
+
+    Y.matrix = Y.matrix[, -1] 
+    name.vec = 0
+    for(ki in 1:length(t1)){
+        tmp = paste0("t1 = ", t1[ki])
+        name.vec = c(name.vec, tmp)
+    }
+    name.vec = name.vec[-1]
+    colnames(Y.matrix) = name.vec
+
+    plot.df = data.frame(x.grid, Y.matrix)
+    plot.df = plot.df %>% gather(key = "pars", value = "value", -1)
+
+    tmp.plot = ggplot(plot.df, aes(x = x.grid, y = value)) + geom_line(aes(color = pars)) + theme_classic() + ggtitle(paste0("Gaussian Processes (b = ", b[i], ")")) + xlab("x") + ylab("Estimated Value")
+
+    assign(paste0("p", i), tmp.plot)
+}
+
+plot.arr = ggarrange(p1, p2, p3, p4, p5, p6, nrow = 3, ncol = 2)
+plot.arr
+```
+
+In nonparametric regression and spatial smoothing cef
+
+```{r}
+rm(list=ls())
+#Set up
+require(fields) # for diagonal matrix multiplication
+require(tidyverse) # for tidyverse
+require(ggplot2) # for plotting'
+require(ggpubr) # for arranging plots
+require(mvtnorm) # for multivariate normal and t distributions
+require(progress) # for progress bar
+require(bayestestR) # mostly for ci() function
+require(coda) # for convergence diagnostics
+require(invgamma) # for inverse gamma
+require(LaplacesDemon)
+require(truncnorm)
+require(dplyr)
+set.seed(702)
+mrs.pb = function(string, M){
+  require(progress)
+  pb = progress_bar$new(format = paste0(string," [:bar] :percent eta: :eta"), total = M, clear = F)
+  return(pb)
+}
+data = read.csv("https://raw.githubusercontent.com/jgscott/SDS383D/master/data/utilities.csv")
+setwd("~/!Spring2022/SM_2")
+```
+
+```{r}
+y = data$gasbill/data$billingdays
+x = data$temp
+
+n = length(x)
+
+
+# Hyperparameters
+t2 = 10^(-6)
+b = c(3, 10, 15)
+t1 = c(1, 5, 10)
+
+s2 = 0.61 
+
+matern.func = function(x, b, tau1sq, tau2sq) {
+	eucDist = as.matrix(dist(x,diag=T,upper=T))
+	kron.delta = diag(nrow=length(x))
+	tau1sq*exp(-.5*(eucDist/b)^2) + tau2sq*kron.delta
+}
+```
+
+
+```{r}
+counter = 1
+pb = mrs.pb("progress", length(t1)*length(b))
+
+for(k in 1:length(t1)){
+    for(j in 1:length(b)){
+
+        pb$tick()
+
+        post.mean = lb = ub = rep(0, n) 
+        Sig = matern.func(x, b[j], t1[k], t2)
+
+        post.mean = solve(diag(n) + s2*solve(Sig))%*%y
+        diff.Sig = solve(diag(n)/s2 + solve(Sig)) 
+        lb = post.mean - 1.96*sqrt(diag(diff.Sig))
+        ub = post.mean + 1.96*sqrt(diag(diff.Sig))
+
+        plot.df = data.frame(mean = post.mean, y = y, x = x, lb = lb, ub = ub)
+
+        plot = ggplot(plot.df, aes(x = x, y = y)) + geom_point(color = "pink", alpha = 0.6) + geom_ribbon(mapping = aes(ymin = lb, ymax = ub), alpha = 0.2) + geom_line(mapping = aes(x = x, y = post.mean), color = "purple") + theme_classic() + ggtitle(paste0("GP: b = ", b[j], ", t1 = ", t1[k]))
+        assign(paste0("p", counter), plot)
+
+        counter = counter + 1
+
+    }
+}
+
+plot = ggarrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, nrow = 3, ncol = 3)
+plot
+```
+
+
+```{r}
+#(E)
+
+M = 500 # number of points in each grid
+t1.grid = seq(0.001, 100, length.out = M)
+b.grid = seq(0.0001, 100, length.out = M)
+grid = expand.grid(b.grid, t1.grid)
+y = as.matrix(y)
+
+margin.likelihood = function(b, t1){
+    C = matern.func(x, b, t1, t2) # get C
+    Sig = C + s2*diag(n)
+    result = -1/2*t(y)%*%solve(Sig)%*%y - 1/2*log(det(Sig)) - n/2*log(2*pi)
+    return(result)
+}
+
+log.vals = rep(0, dim(grid)[1])
+pb = mrs.pb("Evaluating log-marginal likelihood: ", dim(grid)[1])
+
+for(i in 1:dim(grid)[1]){
+    pb$tick()
+    log.vals[i] = margin.likelihood(grid[i, 1], grid[i, 2]) # b, tau
+}
+
+b.hat = grid[which(log.vals == max(log.vals, na.rm = TRUE)), 1]
+t1.hat = grid[which(log.vals == max(log.vals, na.rm = TRUE)), 2]
+
+b.hat = 61.52308
+t1.hat = 39.67996
+
+
+Sig = matern.func(x, b.hat, t1.hat, t2)
+
+post.mean = solve(diag(n) + s2*solve(Sig))%*%y
+diff.Sig = solve(diag(n)/s2 + solve(Sig))
+
+plot.df = data.frame(mean = post.mean, y = y, x = x)
+```
+
+
+```{r}
+plot = ggplot(plot.df, aes(x = x, y = y)) + geom_point(color = "pink", alpha = 0.8) + geom_line(mapping = aes(x = x, y = post.mean), color = "purple") + theme_classic() + ggtitle(paste0("GP: b = ", b.hat, ", t1 = ", t1.hat))
+plot
+```
+
